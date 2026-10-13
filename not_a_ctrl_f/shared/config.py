@@ -49,3 +49,72 @@ def llama_server_path() -> Path:
     if override:
         return Path(override)
     return data_dir() / "llama.cpp" / "llama-server.exe"
+
+
+# (KNOWNFOLDERID, nome em inglês sob ~ se a API falhar)
+_KNOWN_FOLDERS: tuple[tuple[str, str], ...] = (
+    ("{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", "Documents"),
+    ("{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", "Desktop"),
+    ("{374DE290-123F-4565-9164-39C4925E467B}", "Downloads"),
+    ("{33E28130-4E1E-4676-835A-98395C3BC3BB}", "Pictures"),
+    ("{4BD8D571-6D19-48D3-BE97-422220080E43}", "Music"),
+    ("{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", "Videos"),
+)
+
+
+def _known_folder(folder_id: str) -> Path | None:
+    """Resolve uma pasta conhecida do Windows (respeita redirecionamento do OneDrive)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        u = uuid.UUID(folder_id)
+        guid = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        ole32 = ctypes.WinDLL("ole32")
+        shell32.SHGetKnownFolderPath.argtypes = [
+            ctypes.POINTER(GUID), wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        shell32.SHGetKnownFolderPath.restype = ctypes.HRESULT
+        ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+        ptr = ctypes.c_void_p()
+        try:
+            shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(ptr))
+            return Path(ctypes.wstring_at(ptr.value)) if ptr.value else None
+        finally:
+            ole32.CoTaskMemFree(ptr)
+    except Exception:
+        return None
+
+
+def watched_dirs() -> list[Path]:
+    """Pastas monitoradas. NACF_WATCH_DIRS (separadas por os.pathsep) ou as pastas conhecidas do usuário que existirem."""
+    override = os.environ.get("NACF_WATCH_DIRS")
+    if override:
+        candidates = [Path(p) for p in override.split(os.pathsep) if p.strip()]
+    else:
+        candidates = [
+            _known_folder(fid) or Path.home() / fallback for fid, fallback in _KNOWN_FOLDERS
+        ]
+    found: dict[str, Path] = {}
+    for p in candidates:
+        if p.is_dir():
+            found.setdefault(os.path.normcase(os.path.abspath(p)), p)
+    # remove pastas dentro de outra da lista
+    keys = list(found)
+    return [
+        found[k]
+        for k in keys
+        if not any(o != k and k.startswith(o.rstrip(os.sep) + os.sep) for o in keys)
+    ]

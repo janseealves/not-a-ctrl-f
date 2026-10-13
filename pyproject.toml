@@ -9,6 +9,7 @@ dependencies = [
     "pillow>=12.3.0",
     "pypdfium2>=5.14.0",
     "soundfile>=0.14.0",
+    "watchdog==6.0.0",
 ]
 
 [project.scripts]

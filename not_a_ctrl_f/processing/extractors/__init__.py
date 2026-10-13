@@ -18,6 +18,7 @@ from .base import (
     SkipFile,
     _clean,  # privado, mas os testes o acessam como `extractors._clean`
     chunk_text,
+    name_text,
 )
 from .document import (
     MAX_PAGES,

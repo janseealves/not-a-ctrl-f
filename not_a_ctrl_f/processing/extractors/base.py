@@ -84,7 +84,7 @@ def chunk_text(
 
 # ---------- extrator base ----------
 
-def _name_text(path: Path, home: str | Path | None) -> str:
+def name_text(path: Path, home: str | Path | None) -> str:
     full = Path(os.path.abspath(path))
     base = Path(os.path.abspath(home if home is not None else Path.home()))
     try:
@@ -100,7 +100,7 @@ class BaseExtractor(ABC):
     def extract(self, path: Path, *, home: str | Path | None = None) -> Extraction:
         """Peça 'name' (seq 0) + as peças do corpo, numeradas a partir de 1."""
         body = self.read(path)
-        head = Piece("name", 0, _name_text(path, home))
+        head = Piece("name", 0, name_text(path, home))
         return Extraction([head, *body.pieces], body.info)
 
     @abstractmethod
