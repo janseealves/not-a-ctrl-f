@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.4",
+    "pillow>=12.3.0",
+    "pypdfium2>=5.14.0",
+    "soundfile>=0.14.0",
+]
 
 [project.scripts]
 not-a-ctrl-f = "not_a_ctrl_f:main"
