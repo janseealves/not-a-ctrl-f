@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Ambiente virtual (uv)
+.venv/
+
+# Ferramentas
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Banco do índice (SQLite + WAL)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Modelos de embedding baixados
+models/
+.cache/
+
+# Config local / segredos
+.env
+config.local.*
+
+# Logs
+*.log
+logs/
+
+# Editor / SO
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
