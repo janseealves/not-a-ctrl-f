@@ -2,6 +2,16 @@
 
 import os
 from pathlib import Path
+from typing import Annotated, Any
+
+from pydantic import field_validator
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 APP_NAME = "not-a-ctrl-f"
 
@@ -22,33 +32,60 @@ LLAMA_CPP_TAG = "b11461"
 
 def data_dir() -> Path:
     """Diretório de dados do app. Não é criado aqui."""
-    local = os.environ.get("LOCALAPPDATA")
+    local = os.getenv("LOCALAPPDATA")
     if local:
         return Path(local) / APP_NAME
     return Path.home() / ".local" / "share" / APP_NAME
 
 
+class Settings(BaseSettings):
+    """Configuração do usuário: init > env (NACF_*) > data_dir()/config.toml > padrões."""
+
+    model_config = SettingsConfigDict(env_prefix="NACF_", env_ignore_empty=True, extra="ignore")
+
+    db_path: Path | None = None
+    models_dir: Path | None = None
+    llama_server: Path | None = None
+    # no env: separadas por os.pathsep (não JSON); no toml: lista
+    watch_dirs: Annotated[list[Path] | None, NoDecode] = None
+
+    @field_validator("watch_dirs", mode="before")
+    @classmethod
+    def _split_watch_dirs(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return [p.strip() for p in v.split(os.pathsep) if p.strip()]
+        return v
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        toml = TomlConfigSettingsSource(settings_cls, toml_file=data_dir() / "config.toml")
+        return init_settings, env_settings, toml
+
+
+def get_settings() -> Settings:
+    """Sem cache: é barato e os testes mudam o ambiente."""
+    return Settings()
+
+
 def default_db_path() -> Path:
-    override = os.environ.get("NACF_DB_PATH")
-    if override:
-        return Path(override)
-    return data_dir() / "index.db"
+    return get_settings().db_path or data_dir() / "index.db"
 
 
 def models_dir() -> Path:
     """Onde ficam os dois GGUF (TEXT_MODEL_FILE e MEDIA_MODEL_FILE)."""
-    override = os.environ.get("NACF_MODELS_DIR")
-    if override:
-        return Path(override)
-    return data_dir() / "models"
+    return get_settings().models_dir or data_dir() / "models"
 
 
 def llama_server_path() -> Path:
     """O llama-server.exe do release LLAMA_CPP_TAG (zip win-cuda ou win-cpu, com as DLLs ao lado)."""
-    override = os.environ.get("NACF_LLAMA_SERVER")
-    if override:
-        return Path(override)
-    return data_dir() / "llama.cpp" / "llama-server.exe"
+    return get_settings().llama_server or data_dir() / "llama.cpp" / "llama-server.exe"
 
 
 # (KNOWNFOLDERID, nome em inglês sob ~ se a API falhar)
@@ -99,10 +136,10 @@ def _known_folder(folder_id: str) -> Path | None:
 
 
 def watched_dirs() -> list[Path]:
-    """Pastas monitoradas. NACF_WATCH_DIRS (separadas por os.pathsep) ou as pastas conhecidas do usuário que existirem."""
-    override = os.environ.get("NACF_WATCH_DIRS")
+    """Pastas monitoradas. watch_dirs (NACF_WATCH_DIRS ou config.toml) ou as pastas conhecidas do usuário que existirem."""
+    override = get_settings().watch_dirs
     if override:
-        candidates = [Path(p) for p in override.split(os.pathsep) if p.strip()]
+        candidates = override
     else:
         candidates = [
             _known_folder(fid) or Path.home() / fallback for fid, fallback in _KNOWN_FOLDERS

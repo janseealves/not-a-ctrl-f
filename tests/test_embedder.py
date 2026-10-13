@@ -32,6 +32,12 @@ def _vec(key: str) -> list[float]:
 
 
 class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # keep-alive
+
+    def setup(self):
+        super().setup()
+        self.server.connections += 1
+
     def log_message(self, *a):
         pass
 
@@ -64,6 +70,7 @@ class _Handler(BaseHTTPRequestHandler):
 def fake():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     srv.bodies = []
+    srv.connections = 0
     srv.reverse = False
     srv.url = f"http://127.0.0.1:{srv.server_address[1]}"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -93,6 +100,14 @@ def _wav(seconds=1.0, rate=16000):
 def _unit(key: str) -> np.ndarray:
     v = np.asarray(_vec(key), dtype=np.float32)
     return v / np.linalg.norm(v)
+
+
+def test_reuso_de_conexao(fake):
+    with Embedder(fake.url) as emb:
+        for i in range(20):
+            emb.embed_query(f"q{i}")
+    assert len(fake.bodies) == 20
+    assert fake.connections <= 2
 
 
 # 1

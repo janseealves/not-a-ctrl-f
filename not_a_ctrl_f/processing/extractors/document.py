@@ -3,11 +3,11 @@
 import io
 import zipfile
 import zlib
-from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pypdfium2 as pdfium
+from bs4 import BeautifulSoup, Comment
 
 from .base import (
     BaseExtractor,
@@ -63,41 +63,27 @@ def _read_text(path: Path) -> str:
     return _decode(path.read_bytes())
 
 
-class _HtmlText(HTMLParser):
-    _BLOCK = frozenset("p div br li h1 h2 h3 h4 h5 h6 tr section article".split())
-    _IGNORED = frozenset({"script", "style", "head"})
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self._depth = 0  # >0 dentro de script/style/head
-
-    def handle_starttag(self, tag: str, attrs: list) -> None:
-        if tag in self._IGNORED:
-            self._depth += 1
-        elif tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_startendtag(self, tag: str, attrs: list) -> None:
-        if tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self._IGNORED:
-            self._depth = max(0, self._depth - 1)
-        elif tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self._depth:
-            self.parts.append(data)
+_BLOCK_TAGS = frozenset(
+    "p div br li h1 h2 h3 h4 h5 h6 tr section article "
+    "ul ol table header footer nav blockquote pre".split()
+)
+_IGNORED_TAGS = ("script", "style", "head", "noscript", "template")
 
 
 def _html_to_text(html: str) -> str:
-    parser = _HtmlText()
-    parser.feed(html)
-    parser.close()
-    return "".join(parser.parts)
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(_IGNORED_TAGS):
+        tag.decompose()
+    for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        c.extract()
+    # quebra de linha em volta de cada bloco, sem separar texto inline
+    for tag in soup.find_all(_BLOCK_TAGS):
+        if tag.name == "br":
+            tag.replace_with("\n")
+        else:
+            tag.insert_before("\n")
+            tag.insert_after("\n")
+    return soup.get_text()
 
 
 # ---------- DOCX / ODT ----------

@@ -2,18 +2,16 @@
 
 import base64
 import io
-import json
 import math
 import socket
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import numpy as np
 from PIL import Image
 
@@ -239,11 +237,10 @@ class LlamaServer:
                 self.close()
                 raise EmbedderError(f"llama-server encerrou (código {code}):\n{self._log_tail()}")
             try:
-                with urllib.request.urlopen(self.base_url + "/health", timeout=2) as r:
-                    if r.status == 200:
-                        return self
-            except OSError:
-                pass  # ainda carregando (503) ou porta ainda fechada (URLError/HTTPError são OSError)
+                if httpx.get(self.base_url + "/health", timeout=2).status_code == 200:
+                    return self
+            except httpx.HTTPError:
+                pass  # porta ainda fechada ou timeout; status != 200 (503) = ainda carregando
             if time.monotonic() >= deadline:
                 self.close()
                 raise EmbedderError(
@@ -291,6 +288,18 @@ class Embedder:
         self.timeout = timeout
         self.batch_size = batch_size
         self._lock = threading.Lock()
+        self._client = httpx.Client(
+            base_url=self.base_url, timeout=httpx.Timeout(self.timeout, connect=5.0)
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "Embedder":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     @property
     def fingerprint(self) -> str:
@@ -298,24 +307,23 @@ class Embedder:
 
     def _post(self, inputs: list) -> list[np.ndarray]:
         """Uma requisição. _ItemError em HTTP de erro; EmbedderError no resto."""
-        body = json.dumps({"input": inputs, "encoding_format": "float"}).encode()
-        req = urllib.request.Request(
-            self.base_url + "/v1/embeddings", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )  # fmt: skip
         try:
-            with self._lock, urllib.request.urlopen(req, timeout=self.timeout) as r:
-                payload = json.loads(r.read())
-        except urllib.error.HTTPError as e:
+            with self._lock:
+                r = self._client.post(
+                    "/v1/embeddings", json={"input": inputs, "encoding_format": "float"}
+                )
+        except httpx.TransportError as e:  # conexão recusada, timeout, servidor caiu
+            raise EmbedderError(f"servidor de embeddings inacessível: {e}") from e
+        if r.status_code >= 400:
             msg = ""
             try:
-                err = json.loads(e.read()).get("error")
+                err = r.json().get("error")
                 msg = err.get("message", "") if isinstance(err, dict) else str(err)
             except Exception:
                 pass
-            raise _ItemError(_short(msg or f"HTTP {e.code}")) from e
-        except OSError as e:  # inclui URLError, timeout e conexão recusada
-            raise EmbedderError(f"servidor de embeddings inacessível: {e}") from e
+            raise _ItemError(_short(msg or f"HTTP {r.status_code}"))
+        try:
+            payload = r.json()
         except ValueError as e:
             raise EmbedderError(f"resposta inválida do servidor: {e}") from e
 

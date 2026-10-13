@@ -122,6 +122,23 @@ def test_html(tmp_path):
     assert "var" not in text and "nota" not in text
 
 
+def test_html_malformado(tmp_path):
+    f = tmp_path / "m.html"
+    f.write_text("<p>a<p>b<div>c", encoding="utf-8")
+    text = run(f, tmp_path).pieces[1].text
+    assert [ln for ln in text.split("\n") if ln] == ["a", "b", "c"]
+
+
+def test_html_inline_na_mesma_linha(tmp_path):
+    f = tmp_path / "i.html"
+    f.write_text(
+        "<p>Tom <b>&amp;</b> <i>Jerry</i> e <span>Spike</span> <a href='x'>link</a></p>",
+        encoding="utf-8",
+    )
+    text = run(f, tmp_path).pieces[1].text
+    assert [ln for ln in text.split("\n") if ln] == ["Tom & Jerry e Spike link"]
+
+
 # ---------- docx / odt ----------
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
