@@ -1,7 +1,7 @@
 [project]
 name = "not-a-ctrl-f"
 version = "0.1.0"
-description = "Add your description here"
+description = "Busca local por palavra-chave e semântica em documentos, imagens e áudio"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
