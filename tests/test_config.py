@@ -8,7 +8,7 @@ from not_a_ctrl_f.shared import config
 
 @pytest.fixture(autouse=True)
 def limpo(tmp_path, monkeypatch):
-    for k in ("DB_PATH", "MODELS_DIR", "LLAMA_SERVER", "WATCH_DIRS"):
+    for k in ("DB_PATH", "MODELS_DIR", "LLAMA_SERVER", "WATCH_DIRS", "PORT"):
         monkeypatch.delenv(f"NACF_{k}", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     return tmp_path
@@ -58,3 +58,12 @@ def test_env_vence_toml(limpo, monkeypatch):
     monkeypatch.setenv("NACF_WATCH_DIRS", "X")
     assert config.models_dir() == limpo / "env"
     assert config.get_settings().watch_dirs == [Path("X")]
+
+
+def test_ui_port(limpo, monkeypatch):
+    assert config.ui_port() == 47615
+    monkeypatch.setenv("NACF_PORT", "50000")
+    assert config.ui_port() == 50000
+    monkeypatch.delenv("NACF_PORT")
+    _toml(limpo, "port = 51000\n")
+    assert config.ui_port() == 51000

@@ -2,6 +2,7 @@
 
 import base64
 import io
+import logging
 import math
 import socket
 import subprocess
@@ -18,6 +19,8 @@ from PIL import Image
 from not_a_ctrl_f.shared import config
 
 BUDGETS = (70, 140, 280, 560, 1120)
+log = logging.getLogger(__name__)
+
 PROMPTS_VERSION = 1  # mude se os prompts mudarem: entra no fingerprint
 
 _PATCH = 16
@@ -154,6 +157,83 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _kill_on_close_job(proc: subprocess.Popen):
+    """Windows: põe o processo num Job Object que o mata quando o handle fecha (ou o Python morre).
+
+    Devolve o handle do job (guarde-o; fechar mata o processo) ou None (outro SO ou falha).
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]  # fmt: skip
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimits),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    job = None
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        k32.SetInformationJobObject.restype = wintypes.BOOL
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.CloseHandle.restype = wintypes.BOOL
+
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        info = ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(
+            job, 9, ctypes.byref(info), ctypes.sizeof(info)  # JobObjectExtendedLimitInformation
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not k32.AssignProcessToJobObject(job, int(proc._handle)):  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())
+        return job
+    except Exception as e:
+        log.warning("não consegui prender o llama-server a um Job Object: %s", e)
+        if job:
+            k32.CloseHandle(job)
+        return None
+
+
+def _close_job(job) -> None:
+    if job:
+        import ctypes
+
+        ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(job))
+
+
 class LlamaServer:
     """Processo llama-server. start() sobe e espera /health; close() encerra."""
 
@@ -178,6 +258,7 @@ class LlamaServer:
         self.base_url = ""
         self.log_path = config.data_dir() / "logs" / "llama-server.log"
         self._proc: subprocess.Popen | None = None
+        self._job = None  # handle do Job Object (Windows)
         self._log = None
 
     def __enter__(self) -> "LlamaServer":
@@ -229,6 +310,7 @@ class LlamaServer:
         except OSError as e:
             self._close_log()
             raise EmbedderError(f"falha ao iniciar {self.server_path}: {e}") from e
+        self._job = _kill_on_close_job(self._proc)
         self.base_url = f"http://127.0.0.1:{port}"
         deadline = time.monotonic() + self.startup_timeout
         while True:
@@ -262,6 +344,11 @@ class LlamaServer:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+        job, self._job = self._job, None
+        try:
+            _close_job(job)
+        except Exception:
+            log.warning("falha ao fechar o Job Object", exc_info=True)
         self._close_log()
 
 

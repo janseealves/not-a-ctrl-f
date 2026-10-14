@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import socket
+import sys
 import threading
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -300,3 +301,49 @@ def test_integracao_real():
         (au,) = emb.embed_audio([_wav(3.0)])
         for r in (im, au):
             assert r.vector.shape == (768,) and abs(np.linalg.norm(r.vector) - 1) < 1e-3
+
+
+def _pid_alive(pid: int) -> bool:
+    import ctypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        code = ctypes.c_uint32()
+        k32.GetExitCodeProcess(h, ctypes.byref(code))
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        k32.CloseHandle(h)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object é do Windows")
+def test_kill_on_close_job_mata_filho_quando_o_pai_morre():
+    import subprocess
+    import time
+
+    script = (
+        "import os, subprocess, sys\n"
+        "from not_a_ctrl_f.shared.embedder import _kill_on_close_job\n"
+        "d = subprocess.DEVNULL\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        " stdin=d, stdout=d, stderr=d)\n"
+        "assert _kill_on_close_job(p) is not None\n"
+        "print(p.pid, flush=True)\n"
+        "os._exit(0)\n"
+    )
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    pid = int(out.stdout.strip())
+    deadline = time.monotonic() + 5
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    alive = _pid_alive(pid)
+    if alive:  # não deixa lixo
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    assert not alive

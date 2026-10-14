@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     db_path: Path | None = None
     models_dir: Path | None = None
     llama_server: Path | None = None
+    port: int = 47615  # porta da UI web local
     # no env: separadas por os.pathsep (não JSON); no toml: lista
     watch_dirs: Annotated[list[Path] | None, NoDecode] = None
 
@@ -76,6 +77,11 @@ def get_settings() -> Settings:
 
 def default_db_path() -> Path:
     return get_settings().db_path or data_dir() / "index.db"
+
+
+def ui_port() -> int:
+    """Porta da UI web (NACF_PORT ou port no config.toml)."""
+    return get_settings().port
 
 
 def models_dir() -> Path:
